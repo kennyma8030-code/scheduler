@@ -1,3 +1,4 @@
 __pycache__/
 venv/
 roommate-app/node_modules/
+.env
