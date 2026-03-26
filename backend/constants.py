@@ -37,3 +37,6 @@ constraint_dict = {
     "no_guests_when_home": NoGuestsWhenHome,
     "equal_home_time": EqualHomeTime,
 }
+
+
+
