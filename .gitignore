@@ -2,3 +2,6 @@ __pycache__/
 venv/
 roommate-app/node_modules/
 .env
+.soc_cache/
+.DS_Store
+*.db

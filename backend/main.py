@@ -2,12 +2,16 @@ from dotenv import load_dotenv
 from pathlib import Path
 load_dotenv(Path(__file__).parent / ".env")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from backend.models import Scheduler, Schedule, FixedEvent, FlexibleEvent, Scheduler_Weekly
 from backend.algorithm import ScheduleOptimizer
 from backend.PreferenceParser import PreferenceParser
 from backend.EventClassifier import EventClassifier
+from backend.CanvasImporter import CanvasImporter
+from backend.GoogleCalendarImporter import GoogleCalendarImporter
+from backend.db import saveDaily, loadDaily, saveWeekly, loadWeekly, listSchedules
 
 app = FastAPI()
 
@@ -45,6 +49,7 @@ def analyze_day(request: Scheduler, text: str):
     constraints = ScheduleOptimizer.constraint_factory(constraints_JSON, all_events_a, all_events_b)
 
     output = ScheduleOptimizer.best_schedules(combinations_a, combinations_b, constraints)
+    saveDaily(output)
 
     all_names = list({e.name for e in all_events_a + all_events_b})
     categories = EventClassifier().classify(all_names)
@@ -71,11 +76,101 @@ def analyze_week(request: Scheduler_Weekly, text: str):
     constraints = ScheduleOptimizer.constraint_factory(constraints_JSON, all_events_a, all_events_b)
 
     output = ScheduleOptimizer.best_schedules_weekly(combinations_a, combinations_b, constraints)
+    saveWeekly(output)
 
     all_names = list({e.name for e in all_events_a + all_events_b})
     categories = EventClassifier().classify(all_names)
 
     return {"results": output, "constraints": constraints_JSON, "categories": categories}
+
+@app.get("/schedules")
+def get_schedules():
+    return listSchedules()
+
+@app.get("/load/daily")
+def load_daily(id: int):
+    return loadDaily(id)
+
+@app.get("/load/weekly")
+def load_weekly(id: int):
+    return loadWeekly(id)
+
+
+# ── Canvas import ─────────────────────────────────────────────────────────────
+class CanvasDayRequest(BaseModel):
+    url: str
+    date: str        # ISO date e.g. "2026-03-28"
+
+class CanvasWeekRequest(BaseModel):
+    url: str
+    from_date: str | None = None
+
+@app.post("/import/canvas/day")
+def import_canvas_day(request: CanvasDayRequest):
+    try:
+        events = CanvasImporter().fetch_day(request.url, request.date)
+        return {"events": events}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/import/canvas/week")
+def import_canvas_week(request: CanvasWeekRequest):
+    try:
+        events = CanvasImporter().fetch_week(request.url, request.from_date)
+        return {"events": events}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── Google Calendar import ────────────────────────────────────────────────────
+class GoogleDayRequest(BaseModel):
+    url: str
+    date: str
+
+class GoogleWeekRequest(BaseModel):
+    url: str
+    from_date: str | None = None
+
+@app.post("/import/google/day")
+def import_google_day(request: GoogleDayRequest):
+    try:
+        events = GoogleCalendarImporter().fetch_day(request.url, request.date)
+        return {"events": events}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/import/google/week")
+def import_google_week(request: GoogleWeekRequest):
+    try:
+        events = GoogleCalendarImporter().fetch_week(request.url, request.from_date)
+        return {"events": events}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/import/google/debug")
+def import_google_debug(request: GoogleWeekRequest):
+    import recurring_ical_events
+    from icalendar import Calendar
+    import httpx
+    from datetime import date, timedelta
+    res = httpx.get(request.url, timeout=15, follow_redirects=True)
+    cal = Calendar.from_ical(res.content)
+    d = date.fromisoformat(request.from_date) if request.from_date else date.today()
+    monday = d - timedelta(days=d.weekday())
+    out = []
+    for day_idx in range(7):
+        day = monday + timedelta(days=day_idx)
+        for e in recurring_ical_events.of(cal).at(day):
+            start = e["DTSTART"].dt
+            out.append({
+                "day_idx": day_idx,
+                "date": str(day),
+                "summary": str(e.get("SUMMARY", "")),
+                "dtstart": str(start),
+                "has_rrule": "RRULE" in e,
+                "categories": str(e.get("CATEGORIES", "")),
+            })
+    return {"events": out, "week_start": str(monday)}
 
 
 

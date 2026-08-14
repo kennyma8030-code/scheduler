@@ -1,5 +1,24 @@
 import { useState, useEffect } from 'react'
 
+// ── Theme ─────────────────────────────────────────────────────────────────────
+const savedTheme = localStorage.getItem('theme') ?? 'light'
+document.documentElement.setAttribute('data-theme', savedTheme)
+
+function ThemeToggle() {
+  const [dark, setDark] = useState(savedTheme === 'dark')
+  function toggle() {
+    const next = !dark
+    setDark(next)
+    document.documentElement.setAttribute('data-theme', next ? 'dark' : 'light')
+    localStorage.setItem('theme', next ? 'dark' : 'light')
+  }
+  return (
+    <button className="theme-toggle" onClick={toggle} title={dark ? 'Light mode' : 'Dark mode'}>
+      {dark ? '☀' : '☽'}
+    </button>
+  )
+}
+
 // ── Color palette for event blocks ────────────────────────────────────────────
 const PALETTE = [
   '#cdd8f0', '#bfd8c4', '#f0d8c4', '#d8c4f0',
@@ -38,6 +57,25 @@ function fmtHour(h) {
   return h < 12 ? `${h}a` : `${h - 12}p`
 }
 
+// Events and schedule blocks travel as minutes since midnight (the backend runs
+// on a 5-minute grid, so 15:50 is representable). fmtHour stays for the hourly
+// axis labels; these three handle event times.
+function fmtTime(min) {
+  const m = Math.round(min)
+  const h = Math.floor(m / 60), mm = m % 60
+  const suffix = h >= 12 && h < 24 ? 'p' : 'a'
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  return mm === 0 ? `${h12}${suffix}` : `${h12}:${String(mm).padStart(2, '0')}${suffix}`
+}
+function minToHHMM(min) {
+  const m = Math.max(0, Math.min(1439, Math.round(min)))
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+}
+function hhmmToMin(value) {
+  const [h, m] = String(value).split(':').map(Number)
+  return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : 0
+}
+
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 const DAY_NAMES  = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -55,7 +93,11 @@ function Landing({ onStart }) {
     <div className="landing">
       <nav className="top-nav">
         <span className="wordmark">sync.</span>
-        <button className="btn-outline" onClick={() => onStart('daily')}>Open app</button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <ThemeToggle />
+          <button className="btn-outline" onClick={() => onStart('history')}>History</button>
+          <button className="btn-outline" onClick={() => onStart('daily')}>Open app</button>
+        </div>
       </nav>
 
       <section className="hero">
@@ -93,12 +135,14 @@ function Landing({ onStart }) {
 }
 
 // ── RoommateForm ──────────────────────────────────────────────────────────────
-function blankFixed()    { return { name: '', start: 8,  finish: 10, in_dorm: false } }
-function blankFlexible() { return { name: '', duration: 2, in_dorm: false } }
+// start/finish are minutes since midnight; duration is minutes.
+function blankFixed()    { return { name: '', start: 480, finish: 600, in_dorm: false } }
+function blankFlexible() { return { name: '', duration: 120, in_dorm: false } }
 
 function RoommateForm({ label, data, onChange }) {
-  const [tab,  setTab]  = useState('fixed')
-  const [form, setForm] = useState(blankFixed())
+  const [tab,         setTab]         = useState('fixed')
+  const [form,        setForm]        = useState(blankFixed())
+  const [importSrc,   setImportSrc]   = useState(null) // 'canvas' | 'google' | null
 
   function switchTab(t) {
     setTab(t)
@@ -149,23 +193,21 @@ function RoommateForm({ label, data, onChange }) {
             <>
               <div className="lbl-field">
                 <label>Start</label>
-                <input type="number" className="field sm" min={0} max={23}
-                  value={form.start === '' ? '' : form.start}
-                  onChange={e => setForm({ ...form, start: e.target.value === '' ? '' : +e.target.value })}
-                  onBlur={() => setForm(f => ({ ...f, start: f.start === '' ? 0 : f.start }))} />
+                <input type="time" step={300} className="field sm"
+                  value={minToHHMM(form.start)}
+                  onChange={e => setForm({ ...form, start: hhmmToMin(e.target.value) })} />
               </div>
               <div className="lbl-field">
                 <label>End</label>
-                <input type="number" className="field sm" min={1} max={24}
-                  value={form.finish === '' ? '' : form.finish}
-                  onChange={e => setForm({ ...form, finish: e.target.value === '' ? '' : +e.target.value })}
-                  onBlur={() => setForm(f => ({ ...f, finish: f.finish === '' ? 0 : f.finish }))} />
+                <input type="time" step={300} className="field sm"
+                  value={minToHHMM(form.finish)}
+                  onChange={e => setForm({ ...form, finish: hhmmToMin(e.target.value) })} />
               </div>
             </>
           ) : (
             <div className="lbl-field">
-              <label>Duration (hrs)</label>
-              <input type="number" className="field sm" min={1} max={12}
+              <label>Duration (min)</label>
+              <input type="number" className="field sm" min={5} max={720} step={5}
                 value={form.duration}
                 onChange={e => setForm({ ...form, duration: +e.target.value })} />
             </div>
@@ -188,7 +230,7 @@ function RoommateForm({ label, data, onChange }) {
               <div key={`f${i}`} className="ev-row">
                 <span className="ev-dot" style={{ background: hashColor(ev.name) }} />
                 <span className="ev-name">{ev.name}</span>
-                <span className="ev-meta">{fmtHour(ev.start)}-{fmtHour(ev.finish)}</span>
+                <span className="ev-meta">{fmtTime(ev.start)}-{fmtTime(ev.finish)}</span>
                 <button className="ev-del" onClick={() => removeFixed(i)}>x</button>
               </div>
             ))}
@@ -202,6 +244,113 @@ function RoommateForm({ label, data, onChange }) {
             ))}
           </>
         )}
+        <div className="import-row">
+          <button className="btn-canvas" onClick={() => setImportSrc('canvas')}>↓ Canvas</button>
+          <button className="btn-canvas" onClick={() => setImportSrc('google')}>↓ Google Calendar</button>
+        </div>
+      </div>
+
+      {importSrc && (
+        <ICSImportModal
+          source={importSrc}
+          mode="day"
+          onImport={events => {
+            onChange({ ...data, fixed: [...data.fixed, ...events] })
+            setImportSrc(null)
+          }}
+          onClose={() => setImportSrc(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── ICS import modal (Canvas + Google Calendar) ───────────────────────────────
+function getMonday() {
+  const d = new Date()
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+  d.setDate(diff)
+  return d.toISOString().split('T')[0]
+}
+
+const IMPORT_SOURCES = {
+  canvas: {
+    title:       'Import from Canvas',
+    placeholder: 'https://canvas.instructure.com/feeds/calendars/...',
+    hint:        <>In Canvas, go to <strong>Calendar</strong> → scroll to bottom right → click <strong>"Calendar Feed"</strong> and copy the URL.</>,
+    dayEndpoint:  '/import/canvas/day',
+    weekEndpoint: '/import/canvas/week',
+  },
+  google: {
+    title:       'Import from Google Calendar',
+    placeholder: 'https://calendar.google.com/calendar/ical/...',
+    hint:        <>In Google Calendar, go to <strong>Settings</strong> → select a calendar → <strong>Integrate calendar</strong> → copy the <strong>"Secret address in iCal format"</strong>.</>,
+    dayEndpoint:  '/import/google/day',
+    weekEndpoint: '/import/google/week',
+  },
+}
+
+function ICSImportModal({ source, mode, onImport, onClose }) {
+  const cfg = IMPORT_SOURCES[source]
+  const [url,     setUrl]     = useState('')
+  const [date,    setDate]    = useState(new Date().toISOString().split('T')[0])
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState(null)
+
+  async function doImport() {
+    if (!url.trim()) return
+    setLoading(true)
+    setError(null)
+    try {
+      const endpoint = mode === 'week' ? cfg.weekEndpoint : cfg.dayEndpoint
+      const body     = mode === 'week' ? { url, from_date: date } : { url, date }
+      const res = await fetch(`http://localhost:8000${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail ?? `Server error ${res.status}`)
+      }
+      const data = await res.json()
+      if (!data.events.length) {
+        setError('No events found for that date. Try a different date or check the URL.')
+        return
+      }
+      onImport(data.events)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="modal">
+        <p className="modal-title">{cfg.title}</p>
+        <p className="modal-hint">{cfg.hint}</p>
+        <input
+          className="field"
+          placeholder={cfg.placeholder}
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+        />
+        <div className="lbl-field" style={{ marginTop: 10 }}>
+          <label>{mode === 'week' ? 'Starting from (uses that week)' : 'Date'}</label>
+          <input type="date" className="field" value={date} onChange={e => setDate(e.target.value)} />
+        </div>
+        {error && <p className="modal-error">{error}</p>}
+        <div className="modal-footer">
+          <button className="btn-outline" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={doImport} disabled={loading || !url.trim()}>
+            {loading
+              ? <span className="btn-loading"><span className="btn-spinner" />Importing…</span>
+              : 'Import'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -236,12 +385,13 @@ function DayPicker({ days, onChange }) {
 }
 
 // ── WeeklyRoommateForm ────────────────────────────────────────────────────────
-function blankWeeklyFixed()    { return { name: '', start: 8,  finish: 10, in_dorm: false, days: [0,1,2,3,4,5,6] } }
-function blankWeeklyFlexible() { return { name: '', duration: 2, in_dorm: false, days: [0,1,2,3,4,5,6] } }
+function blankWeeklyFixed()    { return { name: '', start: 480, finish: 600, in_dorm: false, days: [0,1,2,3,4,5,6] } }
+function blankWeeklyFlexible() { return { name: '', duration: 120, in_dorm: false, days: [0,1,2,3,4,5,6] } }
 
 function WeeklyRoommateForm({ label, data, onChange }) {
-  const [tab,  setTab]  = useState('fixed')
-  const [form, setForm] = useState(blankWeeklyFixed())
+  const [tab,       setTab]       = useState('fixed')
+  const [form,      setForm]      = useState(blankWeeklyFixed())
+  const [importSrc, setImportSrc] = useState(null)
 
   function switchTab(t) {
     setTab(t)
@@ -292,23 +442,21 @@ function WeeklyRoommateForm({ label, data, onChange }) {
             <>
               <div className="lbl-field">
                 <label>Start</label>
-                <input type="number" className="field sm" min={0} max={23}
-                  value={form.start === '' ? '' : form.start}
-                  onChange={e => setForm({ ...form, start: e.target.value === '' ? '' : +e.target.value })}
-                  onBlur={() => setForm(f => ({ ...f, start: f.start === '' ? 0 : f.start }))} />
+                <input type="time" step={300} className="field sm"
+                  value={minToHHMM(form.start)}
+                  onChange={e => setForm({ ...form, start: hhmmToMin(e.target.value) })} />
               </div>
               <div className="lbl-field">
                 <label>End</label>
-                <input type="number" className="field sm" min={1} max={24}
-                  value={form.finish === '' ? '' : form.finish}
-                  onChange={e => setForm({ ...form, finish: e.target.value === '' ? '' : +e.target.value })}
-                  onBlur={() => setForm(f => ({ ...f, finish: f.finish === '' ? 0 : f.finish }))} />
+                <input type="time" step={300} className="field sm"
+                  value={minToHHMM(form.finish)}
+                  onChange={e => setForm({ ...form, finish: hhmmToMin(e.target.value) })} />
               </div>
             </>
           ) : (
             <div className="lbl-field">
-              <label>Duration (hrs)</label>
-              <input type="number" className="field sm" min={1} max={12}
+              <label>Duration (min)</label>
+              <input type="number" className="field sm" min={5} max={720} step={5}
                 value={form.duration}
                 onChange={e => setForm({ ...form, duration: +e.target.value })} />
             </div>
@@ -332,7 +480,7 @@ function WeeklyRoommateForm({ label, data, onChange }) {
               <div key={`f${i}`} className="ev-row">
                 <span className="ev-dot" style={{ background: hashColor(ev.name) }} />
                 <span className="ev-name">{ev.name}</span>
-                <span className="ev-meta">{fmtHour(ev.start)}-{fmtHour(ev.finish)} · {fmtDays(ev.days)}</span>
+                <span className="ev-meta">{fmtTime(ev.start)}-{fmtTime(ev.finish)} · {fmtDays(ev.days)}</span>
                 <button className="ev-del" onClick={() => removeFixed(i)}>x</button>
               </div>
             ))}
@@ -346,7 +494,23 @@ function WeeklyRoommateForm({ label, data, onChange }) {
             ))}
           </>
         )}
+        <div className="import-row">
+          <button className="btn-canvas" onClick={() => setImportSrc('canvas')}>↓ Canvas</button>
+          <button className="btn-canvas" onClick={() => setImportSrc('google')}>↓ Google Calendar</button>
+        </div>
       </div>
+
+      {importSrc && (
+        <ICSImportModal
+          source={importSrc}
+          mode="week"
+          onImport={events => {
+            onChange({ ...data, fixed: [...data.fixed, ...events] })
+            setImportSrc(null)
+          }}
+          onClose={() => setImportSrc(null)}
+        />
+      )}
     </div>
   )
 }
@@ -383,21 +547,22 @@ function Timeline({ blocks, name, startHour, endHour, hh = HOUR_H, categories })
             />
           ))}
           {blocks.map((b, i) => {
-            const dur = b.finish - b.start
-            const segClass = dur < 0.75 ? 'tl-v-seg xs' : dur < 1.25 ? 'tl-v-seg sm' : 'tl-v-seg'
+            // Blocks arrive as minutes since midnight; hh is pixels per hour.
+            const durMin = b.finish - b.start
+            const segClass = durMin < 45 ? 'tl-v-seg xs' : durMin < 75 ? 'tl-v-seg sm' : 'tl-v-seg'
             return (
               <div
                 key={i}
                 className={segClass}
                 style={{
-                  top:    (b.start  - startHour) * hh + 3,
-                  height: (b.finish - b.start)   * hh - 6,
+                  top:    (b.start / 60 - startHour) * hh + 3,
+                  height: (durMin / 60) * hh - 6,
                   background: eventColor(b.event, categories),
                   animationDelay: `${i * 0.08}s`,
                 }}
               >
                 <span className="tl-v-seg-name">{b.event}</span>
-                {dur >= 1.25 && <span className="tl-v-seg-time">{fmtHour(b.start)}–{fmtHour(b.finish)}</span>}
+                {durMin >= 75 && <span className="tl-v-seg-time">{fmtTime(b.start)}–{fmtTime(b.finish)}</span>}
               </div>
             )
           })}
@@ -524,6 +689,7 @@ function Scheduler({ onBack, onResults, rA, setRA, rB, setRB, prefs, setPrefs })
       <div className="page-nav">
         <button className="btn-back" onClick={onBack}>Back</button>
         <span className="wordmark">sync.</span>
+        <ThemeToggle />
       </div>
 
       <div className="page-intro">
@@ -601,6 +767,7 @@ function WeeklyScheduler({ onBack, onResults, rA, setRA, rB, setRB, prefs, setPr
       <div className="page-nav">
         <button className="btn-back" onClick={onBack}>Back</button>
         <span className="wordmark">sync.</span>
+        <ThemeToggle />
       </div>
 
       <div className="page-intro">
@@ -731,6 +898,7 @@ function Results({ results, nameA, nameB, stats, elapsed, constraints, categorie
       <div className="page-nav">
         <button className="btn-back" onClick={onReset}>← Back</button>
         <span className="wordmark">sync.</span>
+        <ThemeToggle />
       </div>
 
       <div className="page-intro">
@@ -801,6 +969,7 @@ function WeeklyResults({ results, nameA, nameB, constraints, categories, onReset
       <div className="page-nav">
         <button className="btn-back" onClick={onReset}>← Back</button>
         <span className="wordmark">sync.</span>
+        <ThemeToggle />
       </div>
 
       <div className="page-intro">
@@ -849,6 +1018,81 @@ function WeeklyResults({ results, nameA, nameB, constraints, categories, onReset
   )
 }
 
+// ── HistoryView ───────────────────────────────────────────────────────────────
+function HistoryView({ onBack, onLoadDaily, onLoadWeekly }) {
+  const [entries,  setEntries]  = useState(null)
+  const [loading,  setLoading]  = useState(true)
+  const [error,    setError]    = useState(null)
+  const [fetching, setFetching] = useState(null)
+
+  useEffect(() => {
+    fetch('http://localhost:8000/schedules')
+      .then(r => r.json())
+      .then(data => { setEntries(data); setLoading(false) })
+      .catch(e  => { setError(e.message); setLoading(false) })
+  }, [])
+
+  async function open(entry) {
+    setFetching(entry.id)
+    try {
+      const endpoint = entry.type === 'daily' ? `/load/daily?id=${entry.id}` : `/load/weekly?id=${entry.id}`
+      const res  = await fetch(`http://localhost:8000${endpoint}`)
+      const data = await res.json()
+      if (entry.type === 'daily') onLoadDaily(data, entry.created_at)
+      else                        onLoadWeekly(data, entry.created_at)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setFetching(null)
+    }
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '—'
+    const d = new Date(iso)
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  }
+
+  return (
+    <div className="page">
+      <div className="page-nav">
+        <button className="btn-back" onClick={onBack}>Back</button>
+        <span className="wordmark">sync.</span>
+        <ThemeToggle />
+      </div>
+      <div className="page-intro">
+        <h2 className="page-title">Saved schedules</h2>
+        <p className="page-sub">Click any entry to load it.</p>
+      </div>
+
+      {loading && <p className="ev-empty">Loading…</p>}
+      {error   && <div className="error-box">{error}</div>}
+
+      {entries && entries.length === 0 && (
+        <p className="ev-empty">No saved schedules yet.</p>
+      )}
+
+      {entries && entries.length > 0 && (
+        <div className="history-list">
+          {entries.map(entry => (
+            <button
+              key={`${entry.type}-${entry.id}`}
+              className="history-row"
+              onClick={() => open(entry)}
+              disabled={fetching === entry.id}
+            >
+              <span className="history-badge">{entry.type}</span>
+              <span className="history-date">{fmtDate(entry.created_at)}</span>
+              <span className="history-id">#{entry.id}</span>
+              {fetching === entry.id && <span className="btn-spinner" style={{ marginLeft: 'auto' }} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [view,        setView]        = useState('landing')
@@ -876,6 +1120,7 @@ export default function App() {
   const [wPrefs, setWPrefs] = useState('')
 
   function handleStart(mode) {
+    if (mode === 'history') { setView('history'); return }
     setView(mode === 'weekly' ? 'weekly-scheduler' : 'scheduler')
   }
 
@@ -934,6 +1179,30 @@ export default function App() {
       results={wResults} nameA={wNameA} nameB={wNameB}
       constraints={wConstraints} categories={wCategories}
       onReset={() => setView('weekly-scheduler')}
+    />
+  )
+
+  if (view === 'history') return (
+    <HistoryView
+      onBack={() => setView('landing')}
+      onLoadDaily={(data, label) => {
+        setResults(data.results)
+        setStats(data.stats)
+        setConstraints(data.constraints ?? [])
+        setCategories({})
+        setNameA('Roommate A')
+        setNameB('Roommate B')
+        setElapsed(null)
+        setView('results')
+      }}
+      onLoadWeekly={(data, label) => {
+        setWResults(data)
+        setWConstraints([])
+        setWCategories({})
+        setWNameA('Roommate A')
+        setWNameB('Roommate B')
+        setView('weekly-results')
+      }}
     />
   )
 }

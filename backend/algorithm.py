@@ -2,6 +2,13 @@ import heapq
 from itertools import product
 from backend.constants import constraint_dict
 from backend.templates import CrossEventBeforeEvent
+from backend.timegrid import (
+    PLACEMENT_STEP,
+    SLOTS_PER_DAY,
+    hour_list_to_slots,
+    hours_to_slots,
+    slot_to_minutes,
+)
 from collections import defaultdict
 
 
@@ -33,51 +40,58 @@ class ScheduleOptimizer:
     def available_flexible(schedule):
         occupied = set()
         for event in schedule.fixed_events:
-            for hour in range(event.start, event.start + event.duration):
-                occupied.add(hour)
-        return set(range(24)) - occupied
-    
+            occupied.update(range(event.start_slot, event.start_slot + event.duration))
+        return set(range(SLOTS_PER_DAY)) - occupied
+
     @staticmethod
     def available_flexible_weekly(day_fixed_dict, day):
         occupied = set()
         for event in day_fixed_dict[day]:
-            for hour in range(event.start, event.start + event.duration):
-                occupied.add(hour)
-        return set(range(24)) - occupied
+            occupied.update(range(event.start_slot, event.start_slot + event.duration))
+        return set(range(SLOTS_PER_DAY)) - occupied
 
     @staticmethod
     def fixed(schedule):
-        hour_map = {}
+        slot_map = {}
         for event in schedule.fixed_events:
-            for hour in range(event.start, event.start + event.duration):
-                hour_map[hour] = event
-        return hour_map
-    
-    @staticmethod
-    def fixed_weekly(day_fixed_dict, day):
-        hour_map = {}
-        for event in day_fixed_dict[day]:
-            for hour in range(event.start, event.start + event.duration):
-                hour_map[hour] = event
-        return hour_map
+            for slot in range(event.start_slot, event.start_slot + event.duration):
+                slot_map[slot] = event
+        return slot_map
 
     @staticmethod
-    def valid_starts(event, free_hours):
+    def fixed_weekly(day_fixed_dict, day):
+        slot_map = {}
+        for event in day_fixed_dict[day]:
+            for slot in range(event.start_slot, event.start_slot + event.duration):
+                slot_map[slot] = event
+        return slot_map
+
+    @staticmethod
+    def valid_starts(event, free_slots):
+        """Candidate start slots for a flexible event.
+
+        Restricted to PLACEMENT_STEP boundaries. On the 5-minute grid an
+        unrestricted search is intractable — see the note in timegrid.py — and
+        placing a study block at 14:05 rather than 14:00 is not a distinction
+        worth a thousandfold increase in the search space. Fixed events are
+        unaffected and keep exact 5-minute times.
+        """
         return [
-            h for h in free_hours
-            if set(range(h, h + event.duration)).issubset(free_hours)
+            s for s in sorted(free_slots)
+            if s % PLACEMENT_STEP == 0
+            and set(range(s, s + event.duration)).issubset(free_slots)
         ]
 
     @staticmethod
-    def generate(events, free_hours):
+    def generate(events, free_slots):
         if not events:
             return [[]]
         event = events[0]
         remaining = events[1:]
         results = []
-        for start in ScheduleOptimizer.valid_starts(event, free_hours):
+        for start in ScheduleOptimizer.valid_starts(event, free_slots):
             used = set(range(start, start + event.duration))
-            for sub in ScheduleOptimizer.generate(remaining, free_hours - used):
+            for sub in ScheduleOptimizer.generate(remaining, free_slots - used):
                 results.append([{"event": event, "start": start}] + sub)
         return results
 
@@ -104,13 +118,13 @@ class ScheduleOptimizer:
         return schedules
 
     @staticmethod
-    def combinations(events, free_hours, fixed_schedule):
+    def combinations(events, free_slots, fixed_schedule):
         schedules = []
-        for placement in ScheduleOptimizer.generate(events, free_hours):
+        for placement in ScheduleOptimizer.generate(events, free_slots):
             flex_map = {}
             for p in placement:
-                for hour in range(p["start"], p["start"] + p["event"].duration):
-                    flex_map[hour] = p["event"]
+                for slot in range(p["start"], p["start"] + p["event"].duration):
+                    flex_map[slot] = p["event"]
             full = fixed_schedule.copy()
             full.update(flex_map)
             schedules.append(full)
@@ -125,9 +139,9 @@ class ScheduleOptimizer:
         accumulates the weighted penalty. Hard failures are flagged immediately.
 
         For cross-relational constraints: accumulates per-person state (e.g. which
-        hours an event is active) without pairing. The state is snapshotted and
+        slots an event is active) without pairing. The state is snapshotted and
         stored on the ScoredSchedule so phase 2 can compare pairs without
-        re-looping 24 hours.
+        re-looping the whole day.
 
         Timeline blocks are precomputed here since the schedule never changes.
         """
@@ -140,16 +154,16 @@ class ScheduleOptimizer:
             for c in cross_constraints:
                 c.reset_side(person)
 
-            for hour in range(24):
-                event = sched.get(hour)
-                # Single constraints expect (hour, a_event, b_event); pass None
-                # for the unused slot — the constraint picks the right one via self.person
+            for slot in range(SLOTS_PER_DAY):
+                event = sched.get(slot)
+                # Single constraints expect (slot, a_event, b_event); pass None
+                # for the unused side — the constraint picks the right one via self.person
                 a_ev = event if person == "a" else None
                 b_ev = event if person == "b" else None
                 for c in single_constraints:
-                    c.process(hour, a_ev, b_ev)
+                    c.process(slot, a_ev, b_ev)
                 for c in cross_constraints:
-                    c.accumulate(person, hour, event)
+                    c.accumulate(person, slot, event)
 
             for c in single_constraints:
                 c.finalize()
@@ -255,6 +269,33 @@ class ScheduleOptimizer:
 
         return {"results": results, "stats": stats}
 
+    # Constraint params that name whole hours of the day ("study between 9 and 11").
+    HOUR_OF_DAY_PARAMS = ("hours",)
+    # Constraint params that are a length of time in hours ("at least 2 hours between").
+    HOUR_DURATION_PARAMS = (
+        "min_gap", "max_gap", "min_duration", "before", "after",
+        "min_hours", "max_hours",
+    )
+
+    @staticmethod
+    def to_slot_units(params):
+        """Convert an LLM constraint's hour-based params into slot units.
+
+        The prompt in PreferenceParser deliberately still speaks hours, because
+        that is how people describe their days and what the model emits
+        reliably. Constraints, meanwhile, count one tick per 5-minute slot. This
+        is the single place the two meet — templates.py never sees an hour.
+        """
+        converted = dict(params)
+        for key in ScheduleOptimizer.HOUR_OF_DAY_PARAMS:
+            if isinstance(converted.get(key), (list, tuple, set)):
+                converted[key] = hour_list_to_slots(converted[key])
+        for key in ScheduleOptimizer.HOUR_DURATION_PARAMS:
+            value = converted.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                converted[key] = hours_to_slots(value)
+        return converted
+
     @staticmethod
     def constraint_factory(ai_output, events_a, events_b):
         # Per-person maps so shared event names resolve to the right object
@@ -339,15 +380,20 @@ class ScheduleOptimizer:
             if any(isinstance(params.get(k), str) for k in event_keys if k in params):
                 continue
 
-            constraints.append(cls(**params))
+            constraints.append(cls(**ScheduleOptimizer.to_slot_units(params)))
         return constraints
 
     @staticmethod
     def schedule_to_blocks(schedule):
+        """Collapse the slot map into contiguous blocks for the API response.
+
+        Emitted in minutes since midnight, matching the wire format events
+        arrive in — the frontend never sees slot indices.
+        """
         blocks = []
         current = None
-        for hour in range(24):
-            event = schedule.get(hour)
+        for slot in range(SLOTS_PER_DAY):
+            event = schedule.get(slot)
             if event is None:
                 if current:
                     blocks.append(current)
@@ -355,10 +401,15 @@ class ScheduleOptimizer:
                 continue
             if current is not None:
                 if current["event"] == event.name:
-                    current["finish"] += 1
+                    current["finish"] = slot_to_minutes(slot + 1)
                     continue
                 blocks.append(current)
-            current = {"event": event.name, "start": hour, "finish": hour + 1, "in_dorm": event.in_dorm}
+            current = {
+                "event": event.name,
+                "start": slot_to_minutes(slot),
+                "finish": slot_to_minutes(slot + 1),
+                "in_dorm": event.in_dorm,
+            }
         if current:
             blocks.append(current)
         return blocks

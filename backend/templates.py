@@ -4,18 +4,30 @@
 #   Hard constraints: any score > 0 causes the schedule pair to be rejected entirely.
 #   Soft constraints: accumulate weighted penalties.
 #
+# UNITS:
+#   Everything here counts in 5-minute slots — the `hour` argument threaded
+#   through process()/accumulate() is a slot index in 0..SLOTS_PER_DAY-1, and a
+#   constraint that ticks once per slot is measuring 5 minutes, not an hour.
+#   Params named for hours (min_gap, max_hours, min_duration, the `hours`
+#   window) have already been converted to slots by
+#   ScheduleOptimizer.to_slot_units before a constraint is constructed, so no
+#   class in this file performs a unit conversion. The argument keeps its
+#   historical name to avoid churning 27 class signatures.
+#
 # SINGLE CONSTRAINTS (is_cross = False):
 #   Concern one person's schedule. Use self.person ("a" or "b") to pick event stream.
-#   Interface: reset() → process(hour, a_event, b_event) × 24 → finalize()
+#   Interface: reset() → process(slot, a_event, b_event) × SLOTS_PER_DAY → finalize()
 #   Free time (None) is treated as "home" throughout.
 #
 # CROSS-RELATIONAL CONSTRAINTS (is_cross = True):
 #   Compare both roommates' schedules. Processed in two phases:
-#     Phase 1 (per schedule): reset_side(person) → accumulate(person, hour, event) × 24
+#     Phase 1 (per schedule): reset_side(person) → accumulate(person, slot, event) × SLOTS_PER_DAY
 #                             → get_state(person) to snapshot per-person state
 #     Phase 2 (per pair):     load_state("a", state_a) + load_state("b", state_b) → compare()
-#   This avoids re-looping 24 hours for every pair — the inner loop runs once per schedule,
+#   This avoids re-looping the whole day for every pair — the inner loop runs once per schedule,
 #   not once per (schedule_a × schedule_b) combination.
+
+from backend.timegrid import BREAK_MIN_SLOTS, SLOTS_PER_DAY
 
 
 # ── WHEN AN EVENT HAPPENS ─────────────────────────────────────────────────────
@@ -279,7 +291,7 @@ class TimeBetweenEvents:
         if self.min_gap is not None and gap < self.min_gap:
             self.score = (self.min_gap - gap) / self.min_gap
         elif self.max_gap is not None and gap > self.max_gap:
-            self.score = min((gap - self.max_gap) / 24, 1.0)
+            self.score = min((gap - self.max_gap) / SLOTS_PER_DAY, 1.0)
         else:
             self.score = 0.0
 
@@ -328,7 +340,7 @@ class FreeTimeAroundEvent:
             if h < 0 or self.schedule.get(h) is not None:
                 missing += 1
         for h in range(self.event_end, self.event_end + self.after):
-            if h >= 24 or self.schedule.get(h) is not None:
+            if h >= SLOTS_PER_DAY or self.schedule.get(h) is not None:
                 missing += 1
         self.score = missing / required
 
@@ -370,35 +382,39 @@ class KeepScheduleTight:
 
 # Single: limit how many distinct break segments exist between a person's events.
 # Score = normalized excess beyond max_gaps.
+# Only holes of at least min_gap_slots count: on a 5-minute grid the few minutes
+# between two back-to-back classes is a walk across campus, not a break, and
+# counting it would penalize every realistic class schedule.
 class MaxGapsInDay:
     is_cross = False
 
-    def __init__(self, person, max_gaps, hard, weight):
+    def __init__(self, person, max_gaps, hard, weight, min_gap_slots=BREAK_MIN_SLOTS):
         self.person = person
         self.max_gaps = max_gaps
+        self.min_gap_slots = min_gap_slots
         self.hard = hard
         self.weight = weight
         self.gap_count = 0
-        self.in_gap = False
+        self.gap_run = 0
         self.started = False
         self.score = 0
 
     def reset(self):
         self.gap_count = 0
-        self.in_gap = False
+        self.gap_run = 0
         self.started = False
         self.score = 0
 
     def process(self, hour, a_event, b_event):
         event = a_event if self.person == "a" else b_event
         if event is not None:
-            if self.started and self.in_gap:
+            if self.started and self.gap_run >= self.min_gap_slots:
                 self.gap_count += 1
+            self.gap_run = 0
             self.started = True
-            self.in_gap = False
         else:
             if self.started:
-                self.in_gap = True
+                self.gap_run += 1
 
     def finalize(self):
         excess = max(0, self.gap_count - self.max_gaps)
@@ -464,9 +480,9 @@ class TotalHomeHours:
 
     def finalize(self):
         if self.min_hours is not None and self.home_hours < self.min_hours:
-            self.score = (self.min_hours - self.home_hours) / 24
+            self.score = (self.min_hours - self.home_hours) / SLOTS_PER_DAY
         elif self.max_hours is not None and self.home_hours > self.max_hours:
-            self.score = (self.home_hours - self.max_hours) / 24
+            self.score = (self.home_hours - self.max_hours) / SLOTS_PER_DAY
         else:
             self.score = 0.0
 
@@ -496,7 +512,7 @@ class MaxTimesPerDay:
 
     def finalize(self):
         excess = max(0, self.event_hours - self.max_hours)
-        self.score = min(excess / 24, 1.0)
+        self.score = min(excess / SLOTS_PER_DAY, 1.0)
 
 
 # ── EVENT ORDER BETWEEN ROOMMATES ─────────────────────────────────────────────
@@ -653,7 +669,7 @@ class TimeBetweenOurEvents:
         if self.min_gap is not None and gap < self.min_gap:
             self.score = (self.min_gap - gap) / self.min_gap
         elif self.max_gap is not None and gap > self.max_gap:
-            self.score = min((gap - self.max_gap) / 24, 1.0)
+            self.score = min((gap - self.max_gap) / SLOTS_PER_DAY, 1.0)
         else:
             self.score = 0.0
 
@@ -702,7 +718,7 @@ class StartAtSameTime:
         if self.a_start is None or self.b_start is None:
             self.score = 0
             return
-        self.score = abs(self.a_start - self.b_start) / 24
+        self.score = abs(self.a_start - self.b_start) / SLOTS_PER_DAY
 
 
 # ── ROOMMATE OVERLAP ──────────────────────────────────────────────────────────
@@ -840,7 +856,7 @@ class BothHome:
 
     def compare(self):
         overlap = len(self.a_home_hours & self.b_home_hours)
-        self.score = overlap / 24 if self.minimize else (1 - overlap / 24)
+        self.score = overlap / SLOTS_PER_DAY if self.minimize else (1 - overlap / SLOTS_PER_DAY)
 
 
 # Cross-relational: enforce min and/or max hours where both roommates are home simultaneously.
@@ -884,9 +900,9 @@ class BothHomeLimits:
     def compare(self):
         overlap = len(self.a_home_hours & self.b_home_hours)
         if self.min_hours is not None and overlap < self.min_hours:
-            self.score = (self.min_hours - overlap) / 24
+            self.score = (self.min_hours - overlap) / SLOTS_PER_DAY
         elif self.max_hours is not None and overlap > self.max_hours:
-            self.score = (overlap - self.max_hours) / 24
+            self.score = (overlap - self.max_hours) / SLOTS_PER_DAY
         else:
             self.score = 0.0
 
@@ -1195,4 +1211,4 @@ class EqualHomeTime:
             setattr(self, k, v)
 
     def compare(self):
-        self.score = abs(self.a_home - self.b_home) / 24
+        self.score = abs(self.a_home - self.b_home) / SLOTS_PER_DAY
