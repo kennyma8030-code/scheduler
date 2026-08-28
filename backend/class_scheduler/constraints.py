@@ -1,8 +1,8 @@
 """Constraint vocabulary for the course schedule generator.
 
-Three kinds, sharing the contract the roommate optimizer proved out — every
-constraint scores in [0.0, 1.0] where 0 is "no violation", carries a weight,
-and a hard constraint with any score > 0 rejects the schedule outright:
+Three kinds, sharing one contract — every constraint scores in [0.0, 1.0]
+where 0 is "no violation", carries a weight, and a hard constraint with any
+score > 0 rejects the schedule outright:
 
     section     decomposable per (course, section) candidate. Precomputed once
                 per candidate; hard ones act as *filters* before search.

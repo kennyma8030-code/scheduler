@@ -1,10 +1,8 @@
 """Natural-language course preferences -> constraint JSON, via Gemini.
 
-Same mechanics as the roommate PreferenceParser it replaces: the system
-prompt IS the constraint vocabulary spec (one section per group, one worked
-example each), the model emits a bare JSON array, and markdown fences are
-stripped defensively. The weight ladder is copied verbatim — it's
-battle-tested.
+The system prompt IS the constraint vocabulary spec (one section per group,
+one worked example each), the model emits a bare JSON array, and markdown
+fences are stripped defensively.
 
 Vocabulary the model speaks (the factory in constraints.py converts):
     times        "HH:MM" 24-hour strings — hour ints are too coarse for a

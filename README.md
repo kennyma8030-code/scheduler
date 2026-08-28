@@ -83,6 +83,3 @@ Key modules: `backend/class_scheduler/generator.py` (the search),
 (Gemini prompt), `travel.py` (campus transfer rules), `soc.py`/`models.py`/
 `schema.py`/`sync.py` (the SOC data layer).
 
-The legacy roommate-optimizer endpoints (`/analyze/*`, `/import/*`) are still
-mounted in `backend/main.py` but no longer have a UI; they are slated for
-removal.

@@ -43,11 +43,9 @@ html[data-theme="dark"] {
 }
 html[data-theme="dark"] body { background: var(--bg); }
 html[data-theme="dark"] .top-nav { background: rgba(28, 26, 23, 0.88); }
-html[data-theme="dark"] .roommate-card { background: var(--surface); }
 html[data-theme="dark"] .tabs { background: var(--surface); }
 html[data-theme="dark"] .add-form { background: var(--surface); }
 html[data-theme="dark"] .ev-row { background: var(--surface2); }
-html[data-theme="dark"] .dorm-check input[type="checkbox"] { background: var(--surface2); }
 html[data-theme="dark"] .modal { background: var(--surface); }
 html[data-theme="dark"] .error-box { background: #2a1a1a; border-color: #6a3030; color: #e08080; }
 html[data-theme="dark"] .modal-error { background: #2a1a1a; border-color: #6a3030; color: #e08080; }
@@ -290,27 +288,6 @@ input, textarea { font-family: var(--font); }
 }
 .page-sub { font-size: 14px; color: var(--text2); }
 
-/* ── Roommate grid ─────────────────────────────────────────────────────────── */
-.roommates {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  margin-bottom: 28px;
-}
-
-.roommate-card {
-  background: #ffffff;
-  border: 1.5px solid var(--border2);
-  border-radius: 14px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 8px 28px rgba(0,0,0,0.09);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-.roommate-card:focus-within {
-  border-color: #a8a39b;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.09), 0 14px 36px rgba(0,0,0,0.12);
-}
-
 .card-head {
   display: flex;
   align-items: center;
@@ -400,50 +377,6 @@ input, textarea { font-family: var(--font); }
 }
 .lbl-field { display: flex; flex-direction: column; gap: 4px; }
 .lbl-field label { font-size: 11px; font-weight: 500; color: var(--text2); }
-
-.dorm-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text2);
-  padding-bottom: 1px;
-  cursor: pointer;
-  user-select: none;
-}
-.dorm-check input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 17px;
-  height: 17px;
-  border: 1.5px solid var(--border2);
-  border-radius: 5px;
-  background: #ffffff;
-  cursor: pointer;
-  flex-shrink: 0;
-  position: relative;
-  transition: background 0.15s, border-color 0.15s;
-}
-.dorm-check input[type="checkbox"]:checked {
-  background: var(--ink);
-  border-color: var(--ink);
-}
-.dorm-check input[type="checkbox"]:checked::after {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 1.5px;
-  width: 5px;
-  height: 9px;
-  border: 2px solid #ffffff;
-  border-top: none;
-  border-left: none;
-  transform: rotate(45deg);
-}
-.dorm-check:hover input[type="checkbox"]:not(:checked) {
-  border-color: #a8a39b;
-}
 
 .btn-add {
   background: var(--ink);
