@@ -211,6 +211,30 @@ class Meeting(Base):
     section: Mapped[Section] = relationship(back_populates="meetings")
 
 
+class SavedSchedule(Base):
+    """A generated schedule the user kept.
+
+    Sections are referenced as (term_key, index) — never by row id, which a
+    re-sync reassigns (see README). Storing the requirements and preference
+    text alongside the result makes a saved schedule replayable: regenerating
+    after the catalog changes is one POST with the stored inputs.
+    """
+
+    __tablename__ = "saved_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term_key: Mapped[str] = mapped_column(
+        String(16), ForeignKey("terms.key"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120), default="")
+    indexes: Mapped[list] = mapped_column(JSON, default=list)  # ["10901", ...]
+    requirements: Mapped[list] = mapped_column(JSON, default=list)
+    preferences_text: Mapped[str] = mapped_column(Text, default="")
+    constraints_json: Mapped[list] = mapped_column(JSON, default=list)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(32))  # ISO 8601 UTC
+
+
 def make_engine(url: str | None = None, echo: bool = False):
     return create_engine(url or database_url(), echo=echo, future=True)
 

@@ -12,6 +12,7 @@ from backend.EventClassifier import EventClassifier
 from backend.CanvasImporter import CanvasImporter
 from backend.GoogleCalendarImporter import GoogleCalendarImporter
 from backend.db import saveDaily, loadDaily, saveWeekly, loadWeekly, listSchedules
+from backend.class_scheduler.api import router as course_router
 
 app = FastAPI()
 
@@ -22,6 +23,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# The course schedule generator — the product this app is becoming. The
+# roommate endpoints below it are legacy and slated for removal.
+app.include_router(course_router)
 
 @app.post("/analyze/day")
 def analyze_day(request: Scheduler, text: str):
