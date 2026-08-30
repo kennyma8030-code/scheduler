@@ -47,6 +47,19 @@ unchanged. There is no server-side filtering of any kind. This is the single
 most important constraint on the design: **fetch the whole campus dump once,
 cache it, filter locally.** That's what `soc.py` does.
 
+**`openSections.json` ignores `campus` too** (found 2026-08-29). Requesting
+`campus=NB`, `campus=NK` and `campus=CM` returns three byte-identical sets —
+11041 indexes each on the day I checked, against an NB catalog of 11975
+sections. So the response is university-wide, and roughly 3.1k of those
+indexes belong to Newark and Camden.
+
+Consequences: intersect the returned set with the term's own section indexes
+before counting anything, or every NB open-count is inflated by ~40%. And
+surplus indexes are **not** a sign of a stale sync — `poll.py` originally read
+them that way and reported a stale catalog that wasn't stale. Note this is
+unlike `courses.json`, where `campus` *is* honored; only the filter on this
+second endpoint is dead.
+
 ### Term / campus sizes (2026)
 
 | | NB | NK | CM |

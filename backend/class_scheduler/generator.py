@@ -567,8 +567,29 @@ class CourseScheduleGenerator:
                 for c in selection
             ],
             "week": week,
-            "penalties": leaf.breakdown,
+            "penalties": self._penalty_breakdown(leaf),
         }
+
+    def _penalty_breakdown(self, leaf: "_Leaf") -> list[dict]:
+        """The full trade-off list for a result the user actually sees.
+
+        Section-kind constraints are folded in here rather than in
+        ``score_leaf``: they already reached the score through each
+        candidate's precomputed ``section_penalty``, and recomputing them for
+        every leaf would tax the hot loop to produce numbers only the handful
+        of returned results ever display. Sorted by real impact (weight times
+        score), so the biggest compromise reads first.
+        """
+        rows = list(leaf.breakdown)
+        count = len(leaf.selection) or 1
+        for c in self.section_constraints:
+            if c.hard:
+                continue
+            score = sum(c.score_section(cand) for cand in leaf.selection) / count
+            if score > 0:
+                rows.append({**c.describe(), "score": round(score, 4)})
+        rows.sort(key=lambda r: -(r["weight"] * r["score"]))
+        return rows
 
 
 @dataclass

@@ -16,6 +16,7 @@ export default function Builder({ termKey, onBack, onResults }) {
   const [coreCodes, setCoreCodes] = useState([])
   const [showCorePicker, setShowCorePicker] = useState(false)
   const [preferences, setPreferences] = useState('')
+  const [includeClosed, setIncludeClosed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -61,16 +62,20 @@ export default function Builder({ termKey, onBack, onResults }) {
     })
   }
 
-  async function generate() {
+  async function generate(overrideIncludeClosed) {
+    const closedAllowed = overrideIncludeClosed ?? includeClosed
     setBusy(true)
     setError('')
     try {
+      const requirements = toPayload()
+      const options = { open_only: !closedAllowed }
       const out = await api.generate({
         term_key: termKey,
-        requirements: toPayload(),
+        requirements,
         preferences_text: preferences,
+        options,
       })
-      onResults(out, { termKey, requirements: toPayload(), preferences })
+      onResults(out, { termKey, requirements, preferences, options })
     } catch (e) {
       setError(String(e.message ?? e))
     }
@@ -138,11 +143,27 @@ export default function Builder({ termKey, onBack, onResults }) {
               </button>
             ))}
           </div>
+          <label className="closed-toggle">
+            <input
+              type="checkbox"
+              checked={includeClosed}
+              onChange={e => setIncludeClosed(e.target.checked)}
+            />
+            <span>
+              Include closed sections
+              <span className="dim closed-toggle-hint">
+                {includeClosed
+                  ? 'Full sections can appear; open ones still rank higher.'
+                  : 'Only sections you can register for right now.'}
+              </span>
+            </span>
+          </label>
+
           {error && <div className="error-box">{error}</div>}
           <button
             className="btn-primary lg generate-btn"
             disabled={busy || requirements.length === 0}
-            onClick={generate}
+            onClick={() => generate()}
           >
             {busy ? 'Generating…' : 'Generate schedules'}
           </button>

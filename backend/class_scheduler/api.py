@@ -311,6 +311,11 @@ def generate_schedule(body: GenerateRequest):
     out = generator.run()
     out["warnings"] = warnings + out["warnings"]
     out["constraints"] = raw_constraints
+    # What the generator actually ran with: the parsed preferences that
+    # survived the factory, plus the defaults injected on every request. The
+    # raw LLM output above is neither — it omits the defaults and still lists
+    # anything that was dropped.
+    out["applied_constraints"] = [c.describe() for c in constraints]
     return out
 
 

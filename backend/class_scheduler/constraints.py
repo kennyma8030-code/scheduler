@@ -43,7 +43,12 @@ class BaseConstraint:
         self.weight = max(0.0, min(1.0, float(weight)))
 
     def describe(self) -> dict:
-        return {"type": self.type_name, "hard": self.hard, "weight": self.weight}
+        return {
+            "type": self.type_name,
+            "kind": self.kind,
+            "hard": self.hard,
+            "weight": self.weight,
+        }
 
 
 class SectionConstraint(BaseConstraint):
@@ -762,4 +767,9 @@ def default_constraints(open_only: bool = True) -> list[BaseConstraint]:
     defaults: list[BaseConstraint] = [TravelComfort(slack=10, weight=0.5)]
     if open_only:
         defaults.append(OpenSectionsOnly(hard=True))
+    else:
+        # Closed sections are allowed through, but availability still matters:
+        # kept soft so an otherwise-equal open schedule outranks a closed one,
+        # rather than the two scoring identically.
+        defaults.append(OpenSectionsOnly(hard=False, weight=0.8))
     return defaults

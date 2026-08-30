@@ -17,8 +17,12 @@ export const api = {
   terms: () => request('/terms'),
   subjects: (termKey) => request(`/subjects?term_key=${termKey}`),
   coreCodes: (termKey) => request(`/core-codes?term_key=${termKey}`),
-  searchCourses: (termKey, q, extra = '') =>
-    request(`/courses/search?term_key=${termKey}&q=${encodeURIComponent(q)}${extra}`),
+  // `signal` lets the caller cancel a superseded request — see CourseSearch.
+  searchCourses: (termKey, q, { extra = '', signal } = {}) =>
+    request(
+      `/courses/search?term_key=${termKey}&q=${encodeURIComponent(q)}${extra}`,
+      { signal },
+    ),
   courseDetail: (termKey, courseString, supplement = '') =>
     request(`/courses/${termKey}/${encodeURIComponent(courseString)}?supplement=${encodeURIComponent(supplement)}`),
   openStatus: (termKey) => request(`/open-status?term_key=${termKey}`),

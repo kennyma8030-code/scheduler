@@ -7,12 +7,34 @@ import ThemeToggle from '../components/ThemeToggle'
 
 // Results are grouped as course combinations, each with section variants
 // inside. Open badges refresh live every 30 seconds.
-export default function Results({ output, request, onBack }) {
+export default function Results({ output, request, onBack, onResults }) {
   const combos = output.course_combos ?? []
   const [comboIdx, setComboIdx] = useState(0)
   const [variantIdx, setVariantIdx] = useState(0)
   const [openIndexes, setOpenIndexes] = useState(null)
   const [savedId, setSavedId] = useState(null)
+  const [retrying, setRetrying] = useState(false)
+
+  // Availability is why this failed, and the user can just ask for closed ones.
+  const blockedByAvailability =
+    output.infeasible?.reason?.includes('open_sections_only') &&
+    request.options?.open_only !== false
+
+  async function retryWithClosed() {
+    setRetrying(true)
+    const options = { ...(request.options ?? {}), open_only: false }
+    try {
+      const out = await api.generate({
+        term_key: request.termKey,
+        requirements: request.requirements,
+        preferences_text: request.preferences,
+        options,
+      })
+      onResults(out, { ...request, options })
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   useEffect(() => {
     let alive = true
@@ -36,6 +58,14 @@ export default function Results({ output, request, onBack }) {
       .filter(sel => !sel.section.meetings.some(m => m.day !== null && m.start !== null))
       .map(sel => ({ course_string: sel.course_string, index: sel.section.index }))
   }, [result])
+
+  // Prefer the live poll over the snapshot the result was built from.
+  const closedCount = useMemo(() => {
+    if (!result) return 0
+    return result.selections.filter(sel =>
+      openIndexes ? !openIndexes.has(sel.section.index) : !sel.section.open
+    ).length
+  }, [result, openIndexes])
 
   async function save() {
     const saved = await api.save({
@@ -65,8 +95,27 @@ export default function Results({ output, request, onBack }) {
               ? <>The requirement <strong>{output.infeasible.group}</strong>: {output.infeasible.reason}</>
               : output.infeasible.reason}
           </p>
-          <button className="btn-primary" onClick={onBack}>Adjust requirements</button>
+          {blockedByAvailability && (
+            <p className="dim">
+              Every section is currently full. You can still build a schedule
+              around closed sections — useful for planning, or for watching one
+              until a seat opens.
+            </p>
+          )}
+          <div className="infeasible-actions">
+            {blockedByAvailability && (
+              <button className="btn-primary" disabled={retrying} onClick={retryWithClosed}>
+                {retrying ? 'Retrying…' : 'Include closed sections'}
+              </button>
+            )}
+            <button className="btn-outline" onClick={onBack}>Adjust requirements</button>
+          </div>
         </div>
+        <PenaltyPanel
+          warnings={output.warnings}
+          stats={output.stats}
+          applied={output.applied_constraints}
+        />
       </div>
     )
   }
@@ -83,7 +132,11 @@ export default function Results({ output, request, onBack }) {
           <h2>No valid combinations found</h2>
           <p>Every section pairing hit a conflict or a hard constraint. Try
           loosening a hard preference or unlocking a section.</p>
-          <PenaltyPanel warnings={output.warnings} stats={output.stats} />
+          <PenaltyPanel
+            warnings={output.warnings}
+            stats={output.stats}
+            applied={output.applied_constraints}
+          />
           <button className="btn-primary" onClick={onBack}>Adjust requirements</button>
         </div>
       </div>
@@ -120,6 +173,12 @@ export default function Results({ output, request, onBack }) {
             {result.credits_assumed ? '≈' : ''}{result.credits_total} credits ·
             indexes {result.indexes.join(', ')}
           </span>
+          {closedCount > 0 && (
+            <div className="closed-notice">
+              {closedCount} of {result.selections.length} sections {closedCount === 1 ? 'is' : 'are'} full
+              — you can't register for {closedCount === 1 ? 'it' : 'them'} yet.
+            </div>
+          )}
         </div>
         <div className="result-head-actions">
           {combo.results.length > 1 && (
@@ -155,6 +214,7 @@ export default function Results({ output, request, onBack }) {
         penalties={result.penalties}
         warnings={output.warnings}
         stats={output.stats}
+        applied={output.applied_constraints}
       />
     </div>
   )

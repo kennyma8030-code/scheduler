@@ -28,6 +28,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    event,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -211,6 +212,60 @@ class Meeting(Base):
     section: Mapped[Section] = relationship(back_populates="meetings")
 
 
+class SectionStatus(Base):
+    """Latest known open/closed state of one section, and when it last flipped.
+
+    These three polling tables deliberately carry **no foreign key to terms**.
+    ``sync.py`` replaces a term by deleting the row and letting the cascade
+    take courses, sections, and meetings with it; a FK here would take the
+    observation history along with them. Sections are referenced the way the
+    rest of the system does it — by ``(term_key, index)``, the identifier that
+    survives a re-sync.
+    """
+
+    __tablename__ = "section_status"
+
+    term_key: Mapped[str] = mapped_column(String(16), primary_key=True)
+    index: Mapped[str] = mapped_column(String(8), primary_key=True)
+    is_open: Mapped[bool] = mapped_column(default=False)
+    since: Mapped[str] = mapped_column(String(32))  # ISO 8601 UTC of last flip
+
+
+class SectionStatusChange(Base):
+    """Append-only log of every observed open/closed transition."""
+
+    __tablename__ = "section_status_changes"
+    __table_args__ = (
+        Index("ix_status_changes_section", "term_key", "index"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term_key: Mapped[str] = mapped_column(String(16), index=True)
+    index: Mapped[str] = mapped_column(String(8))
+    is_open: Mapped[bool] = mapped_column()
+    at: Mapped[str] = mapped_column(String(32))  # ISO 8601 UTC
+
+
+class PollRun(Base):
+    """One row per poll tick, whether or not anything changed.
+
+    Without this, a quiet stretch in the change log is ambiguous: it could
+    mean nothing moved, or it could mean the poller was down. Any analysis of
+    how fast sections fill needs to tell those apart.
+    """
+
+    __tablename__ = "poll_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term_key: Mapped[str] = mapped_column(String(16), index=True)
+    at: Mapped[str] = mapped_column(String(32))
+    open_count: Mapped[int] = mapped_column(Integer, default=0)
+    opened: Mapped[int] = mapped_column(Integer, default=0)
+    closed: Mapped[int] = mapped_column(Integer, default=0)
+    # Open indexes with no catalog row — the sign of a stale term sync.
+    unknown: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class SavedSchedule(Base):
     """A generated schedule the user kept.
 
@@ -223,9 +278,12 @@ class SavedSchedule(Base):
     __tablename__ = "saved_schedules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    term_key: Mapped[str] = mapped_column(
-        String(16), ForeignKey("terms.key"), index=True
-    )
+    # No foreign key to terms, deliberately. A saved schedule has to outlive a
+    # re-sync — that is why the requirements are stored alongside it, so it can
+    # be regenerated. A plain FK would block the term delete that sync.py does,
+    # and ON DELETE CASCADE would silently destroy the user's saved schedules
+    # every time the catalog refreshed.
+    term_key: Mapped[str] = mapped_column(String(16), index=True)
     name: Mapped[str] = mapped_column(String(120), default="")
     indexes: Mapped[list] = mapped_column(JSON, default=list)  # ["10901", ...]
     requirements: Mapped[list] = mapped_column(JSON, default=list)
@@ -236,7 +294,21 @@ class SavedSchedule(Base):
 
 
 def make_engine(url: str | None = None, echo: bool = False):
-    return create_engine(url or database_url(), echo=echo, future=True)
+    engine = create_engine(url or database_url(), echo=echo, future=True)
+    if engine.dialect.name == "sqlite":
+        # SQLite ignores ON DELETE CASCADE unless foreign keys are enabled per
+        # connection, and the default is off. Postgres enforces them natively,
+        # so this only bites the local fallback — and only on the *second* sync
+        # of a term: sync.py deletes the term row expecting courses to go with
+        # it, they survive, and the rebuild dies on the uq_course_per_term
+        # unique constraint.
+        @event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, _record):  # noqa: ANN001
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return engine
 
 
 def make_session_factory(engine=None):

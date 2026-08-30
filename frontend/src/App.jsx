@@ -25,6 +25,7 @@ export default function App() {
         output={output}
         request={request}
         onBack={() => setView('builder')}
+        onResults={(out, req) => { setOutput(out); setRequest(req) }}
       />
     )
   }

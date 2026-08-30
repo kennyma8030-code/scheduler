@@ -64,11 +64,42 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
+### Open/closed polling
+
+`openSections.json` is a snapshot, not a change feed, so the poller diffs the
+fetched set of open registration indexes against the last known state and
+records only the transitions.
+
+```bash
+backend/venv/Scripts/python -m backend.class_scheduler.poll            # all synced terms
+backend/venv/Scripts/python -m backend.class_scheduler.poll 2026-9-NB  # one term
+backend/venv/Scripts/python -m backend.class_scheduler.poll --report   # recent activity
+```
+
+The first run for a term seeds state silently; later runs log every flip to
+`section_status_changes`. Every tick also writes a `poll_runs` row whether or
+not anything moved, so a quiet stretch can be told apart from a poller
+outage. If a run reports open indexes "not in the catalog", the term's sync is
+stale — re-run `sync` for it.
+
+**Deploying the poller** (Railway cron, or any scheduler): deploy this repo as
+a second service whose start command is
+`python -m backend.class_scheduler.poll`, with a cron schedule of
+`*/15 * * * *`. Schedules are UTC and the platform minimum interval is 5
+minutes. The process must exit when finished — Railway skips subsequent runs
+while a previous one is alive — which it does, disposing the engine on the way
+out. Note that each run gets a fresh container, so `SOCClient`'s disk cache
+starts cold and every tick performs a real fetch.
+
+Sub-5-minute polling (for an instant-notification sniper, where the interval
+*is* the product) is not possible with cron and needs an always-on worker
+looping with a sleep instead.
+
 ## Development
 
 ```bash
-# engine tests (no network, no DB)
-backend/venv/Scripts/python -m backend.class_scheduler.tests.test_engine
+# all tests (no network, no DB)
+backend/venv/Scripts/python -m backend.class_scheduler.tests
 
 # live end-to-end harness against the synced DB
 backend/venv/Scripts/python -m backend.class_scheduler.harness 2026-9-NB
@@ -80,6 +111,6 @@ backend/venv/Scripts/python -m backend.class_scheduler.explore 2026 fall NB
 Key modules: `backend/class_scheduler/generator.py` (the search),
 `constraints.py` (the vocabulary + LLM-output factory), `catalog.py`
 (requirements + DB queries), `api.py` (HTTP surface), `preference_parser.py`
-(Gemini prompt), `travel.py` (campus transfer rules), `soc.py`/`models.py`/
-`schema.py`/`sync.py` (the SOC data layer).
+(Gemini prompt), `travel.py` (campus transfer rules), `poll.py` (open/closed
+history), `soc.py`/`models.py`/`schema.py`/`sync.py` (the SOC data layer).
 

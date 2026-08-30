@@ -9,6 +9,7 @@ export default function CourseSearch({ termKey, onPick, placeholder }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const timer = useRef(null)
+  const inFlight = useRef(null)
   const boxRef = useRef(null)
 
   useEffect(() => {
@@ -16,21 +17,45 @@ export default function CourseSearch({ termKey, onPick, placeholder }) {
       if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false)
     }
     document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      clearTimeout(timer.current)
+      inFlight.current?.abort()
+    }
   }, [])
 
   function onChange(value) {
     setQuery(value)
     clearTimeout(timer.current)
-    if (value.trim().length < 2) { setResults([]); setOpen(false); return }
+    // Cancel a request already on the wire. Debouncing alone can't prevent a
+    // slow early response from landing after a fast later one and overwriting
+    // the dropdown with results for a query the user has moved past.
+    inFlight.current?.abort()
+
+    if (value.trim().length < 2) {
+      setResults([])
+      setOpen(false)
+      setBusy(false)
+      return
+    }
+
     timer.current = setTimeout(async () => {
+      const request = new AbortController()
+      inFlight.current = request
       setBusy(true)
       try {
-        const rows = await api.searchCourses(termKey, value.trim())
+        const rows = await api.searchCourses(termKey, value.trim(), {
+          signal: request.signal,
+        })
         setResults(rows)
         setOpen(true)
-      } catch { setResults([]) }
-      setBusy(false)
+      } catch (err) {
+        // A superseded request must leave state alone; a newer one owns it now.
+        if (err.name === 'AbortError') return
+        setResults([])
+      } finally {
+        if (!request.signal.aborted) setBusy(false)
+      }
     }, 200)
   }
 
